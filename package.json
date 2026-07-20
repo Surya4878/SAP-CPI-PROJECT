@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dashboard": "node dashboard/server.js"
   },
   "keywords": [],
   "author": "",
@@ -15,7 +16,9 @@
     "axios": "^1.18.1",
     "better-sqlite3": "^12.11.1",
     "bottleneck": "^2.19.5",
+    "diff": "^9.0.0",
     "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "fast-xml-parser": "^5.10.0"
   },
   "devDependencies": {

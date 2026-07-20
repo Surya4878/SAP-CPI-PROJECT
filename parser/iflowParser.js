@@ -1,7 +1,7 @@
 const { XMLParser } = require('fast-xml-parser');
 const { parseAdapter, propertiesToMap } = require('./adapters');
 
-const PARSER_VERSION = 2; // Bump version so it reparses!
+const PARSER_VERSION = 3; // Bump version to catch JMS queues
 
 function findParentsWithProperty(obj, propName, result = []) {
   if (obj === null || typeof obj !== 'object') return result;

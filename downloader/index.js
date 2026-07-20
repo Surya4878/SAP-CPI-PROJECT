@@ -46,6 +46,8 @@ async function processArtifactDownload(artifact) {
   // Update hash on the artifact
   db.prepare(`UPDATE artifacts SET content_hash = ?, last_synced_at = CURRENT_TIMESTAMP WHERE source_id = ? AND deleted_at IS NULL`).run(zipHash, source_id);
 
+  const metadataHash = existing ? existing.metadata_hash : null;
+
   // Extract via adm-zip
   let zip;
   try {
@@ -56,6 +58,7 @@ async function processArtifactDownload(artifact) {
 
   const zipEntries = zip.getEntries();
   const foundResourcePaths = [];
+  const innerHashes = [];
   let res_new = 0, res_changed = 0;
 
   for (const entry of zipEntries) {
@@ -80,6 +83,7 @@ async function processArtifactDownload(artifact) {
     }
 
     foundResourcePaths.push(path);
+    innerHashes.push(`${path}:${contentHash}`);
 
     const resourceData = {
       source_id: path, // Required by baseColumns
@@ -96,6 +100,15 @@ async function processArtifactDownload(artifact) {
     if (status === 'new') res_new++;
     if (status === 'changed') res_changed++;
   }
+
+  innerHashes.sort();
+  const innerContentHash = hashBuffer(Buffer.from(innerHashes.join('\n')));
+
+  // Archive this version's binary zip payload
+  db.prepare(`
+    INSERT INTO artifact_versions (artifact_id, cpi_version, content_hash, metadata_hash, inner_content_hash, zip_content) 
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(source_id, version, zipHash, metadataHash, innerContentHash, rawZipBuffer);
 
   const deletedResourcesCount = resourceRepo.markMissingAsDeleted(source_id, foundResourcePaths);
 

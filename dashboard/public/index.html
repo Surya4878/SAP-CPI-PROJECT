@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antigravity Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <h1>Antigravity Dashboard</h1>
+      <div id="overview-metrics" class="metrics-row"></div>
+    </header>
+
+    <main class="main-content">
+      <aside class="sidebar">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-bottom: 1px solid var(--border);">
+          <h2 style="margin: 0; padding: 0; border-bottom: none;">Artifacts</h2>
+          <button id="btn-sync" class="btn small" onclick="syncTenant()">↻ Refresh</button>
+        </div>
+        <div class="controls">
+          <input type="text" id="artifact-search" placeholder="Search artifacts..." />
+        </div>
+        <ul id="artifact-list" class="artifact-list"></ul>
+      </aside>
+
+      <section class="content-panel">
+        <div id="welcome-state" class="state-view">
+          <h2>Select an artifact to view details</h2>
+        </div>
+        
+        <div id="detail-state" class="state-view hidden">
+          <header class="detail-header">
+            <h2 id="detail-title">Artifact Name</h2>
+            <div id="detail-badges"></div>
+          </header>
+
+          <div class="detail-sections">
+            <div class="section-card">
+              <h3>Explain Artifact</h3>
+              <p>Uses LLM to analyze structural metadata and generate a plain-text markdown explanation.</p>
+              <button id="explain-btn" class="btn primary">View Explanation</button>
+              <button id="explain-download-btn" class="btn secondary" style="display:none; margin-left: 1rem;">Download .md</button>
+              <div id="explain-status" class="status-msg"></div>
+              <pre id="explain-content" style="display:none; background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 4px; overflow-x: auto; font-family: monospace; font-size: 0.9rem; margin-top: 1rem; white-space: pre-wrap; word-wrap: break-word;"></pre>
+            </div>
+
+            <div class="section-card">
+              <h3>Generate Fix</h3>
+              <p>Safe action. Uses LLM to diagnose and generate a fix based on error signatures.</p>
+              <button id="generate-fix-btn" class="btn primary">Generate Fix</button>
+              <div id="generate-status" class="status-msg"></div>
+            </div>
+
+            <div class="section-card" id="pending-fix-section">
+              <h3>Pending Fix</h3>
+              <div id="diff-container" class="diff-view"></div>
+              
+              <div class="danger-zone">
+                <h4>Apply Fix</h4>
+                <p>Modifies the live tenant. Type the artifact name to confirm.</p>
+                <div class="input-group">
+                  <input type="text" id="apply-confirm-input" placeholder="Type artifact name here">
+                  <button id="apply-fix-btn" class="btn danger" disabled>Apply Fix</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-card">
+              <h3>Rollback</h3>
+              <p>Rolls back to a previous design-time version and deploys it.</p>
+              <div id="version-list-container"></div>
+              
+              <div class="danger-zone">
+                <h4>Confirm Rollback</h4>
+                <p>Modifies the live tenant. Type the artifact name to confirm.</p>
+                <div class="input-group">
+                  <input type="text" id="rollback-confirm-input" placeholder="Type artifact name here">
+                  <button id="rollback-btn" class="btn danger" disabled>Rollback</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-card">
+              <h3>Undeploy</h3>
+              <p>Removes the artifact from the live runtime.</p>
+              
+              <div class="danger-zone">
+                <h4>Confirm Undeploy</h4>
+                <p>Modifies the live tenant. Type the artifact name to confirm.</p>
+                <div class="input-group">
+                  <input type="text" id="undeploy-confirm-input" placeholder="Type artifact name here">
+                  <button id="undeploy-btn" class="btn danger" disabled>Undeploy</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="section-card">
+              <h3>Structural Flags</h3>
+              <div id="flags-container"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js?v=2"></script>
+</body>
+</html>

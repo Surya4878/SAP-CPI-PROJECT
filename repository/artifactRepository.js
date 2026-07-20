@@ -7,19 +7,18 @@ class ArtifactRepository extends BaseRepository {
   }
 
   upsertArtifact(data) {
-    const stmt = db.prepare(`SELECT * FROM artifacts WHERE source_id = ? AND package_id = ? AND type = ? AND deleted_at IS NULL`);
-    const existing = stmt.get(data.source_id, data.package_id, data.type);
-    
+    const existing = db.prepare('SELECT id, metadata_hash FROM artifacts WHERE source_id = ? AND deleted_at IS NULL').get(data.source_id);
+
     if (!existing) {
-      data.last_synced_at = new Date().toISOString();
-      this.insert(data);
+      db.prepare(`
+        INSERT INTO artifacts (source_id, package_id, version, name, type, metadata_hash)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(data.source_id, data.package_id, data.version, data.name, data.type, data.metadata_hash);
       return 'new';
     }
 
-    // Change detection strategy: use version if present, fallback to content_hash
-    const hasChanged = data.version 
-      ? existing.version !== data.version 
-      : existing.content_hash !== data.content_hash;
+    // Change detection strategy: active drafts share the same version string, so ALWAYS compare metadata_hash
+    const hasChanged = existing.metadata_hash !== data.metadata_hash;
 
     if (!hasChanged) {
       // Unchanged -> UPDATE last_synced_at only
@@ -27,18 +26,11 @@ class ArtifactRepository extends BaseRepository {
       return 'unchanged';
     } else {
       // Changed -> UPDATE record in place, increment sync_version
-      const keys = Object.keys(data);
-      const setClause = keys.map(k => `${k} = ?`).join(', ');
-      const values = Object.values(data);
-      
       db.prepare(`
         UPDATE artifacts 
-        SET ${setClause}, 
-            sync_version = sync_version + 1, 
-            last_synced_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(...values, existing.id);
-      
+        SET package_id = ?, version = ?, name = ?, type = ?, metadata_hash = ?, sync_version = sync_version + 1, last_synced_at = CURRENT_TIMESTAMP 
+        WHERE source_id = ? AND deleted_at IS NULL
+      `).run(data.package_id, data.version, data.name, data.type, data.metadata_hash, data.source_id);
       return 'changed';
     }
   }

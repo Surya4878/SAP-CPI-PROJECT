@@ -45,7 +45,7 @@ function parseAdapter(extensionElements, direction) {
       result.config.userCredential = props['userCredentialAlias'];
       break;
     case 'JMS':
-      result.address = props['QueueName']; // Address is the queue name for JMS
+      result.address = props['QueueName_outbound'] || props['QueueName_inbound'] || props['QueueName'];
       break;
     case 'JDBC':
       result.address = props['jdbcDataSourceAlias'];

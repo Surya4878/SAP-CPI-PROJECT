@@ -183,7 +183,11 @@ async function runDiscovery() {
             version: art.Version || null,
             name: art.Name || art.Key || sourceId,
             type: artifactConfig.type,
-            content_hash: art.Version ? null : hashObject(art)
+            metadata_hash: hashObject({
+              version: art.Version,
+              modifiedAt: art.ModifiedAt || art.ModifiedDate,
+              modifiedBy: art.ModifiedBy
+            })
           };
           
           const status = artifactRepo.upsertArtifact(artData);

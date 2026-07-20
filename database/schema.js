@@ -122,6 +122,155 @@ const initSchema = (db) => {
     CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_type, source_id);
     CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_type, target_id);
   `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS log_queries (
+      artifact_id TEXT NOT NULL,
+      queried_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      window_hours INTEGER NOT NULL,
+      run_count INTEGER DEFAULT 0,
+      failure_count INTEGER DEFAULT 0,
+      success_count INTEGER DEFAULT 0,
+      cached_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (artifact_id, window_hours)
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      artifact_id TEXT NOT NULL,
+      reviewed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      model_used TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      verdict TEXT NOT NULL,
+      issues_json TEXT NOT NULL,
+      summary TEXT,
+      review_version INTEGER DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_reviews_artifact_id ON reviews(artifact_id);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS risk_scores (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      artifact_id TEXT NOT NULL,
+      computed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      structural_risk TEXT NOT NULL,
+      runtime_risk TEXT NOT NULL,
+      reviewer_risk TEXT NOT NULL,
+      composite_risk TEXT NOT NULL,
+      contributing_factors_json TEXT NOT NULL,
+      review_id INTEGER,
+      blast_radius_snapshot_hash TEXT NOT NULL,
+      FOREIGN KEY(review_id) REFERENCES reviews(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_risk_scores_artifact_id ON risk_scores(artifact_id);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deployments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      artifact_id TEXT NOT NULL,
+      initiated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      confirmed_by TEXT,
+      content_hash_verified BOOLEAN,
+      task_id TEXT,
+      polling_status TEXT,
+      final_result TEXT,
+      completed_at DATETIME,
+      error_detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_deployments_artifact_id ON deployments(artifact_id);
+  `);
+
+  // NOTE: This table currently stores full artifact ZIPs indefinitely.
+  // Pruning logic (e.g., retaining only the last N versions per artifact) 
+  // should be added later to prevent unbounded growth as syncs scale.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS artifact_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      artifact_id TEXT NOT NULL,
+      cpi_version TEXT,
+      content_hash TEXT NOT NULL,
+      metadata_hash TEXT,
+      inner_content_hash TEXT,
+      zip_content BLOB NOT NULL,
+      saved_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_artifact_versions_artifact_id ON artifact_versions(artifact_id);
+
+    CREATE TABLE IF NOT EXISTS generated_fixes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      artifact_id TEXT NOT NULL,
+      issue_context TEXT NOT NULL,
+      error_signature TEXT NOT NULL,
+      original_content_hash TEXT NOT NULL,
+      original_content TEXT NOT NULL,
+      proposed_content TEXT NOT NULL,
+      explanation TEXT,
+      confidence_level TEXT,
+      generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      applied BOOLEAN DEFAULT 0,
+      applied_at DATETIME,
+      outcome TEXT,
+      fix_type TEXT DEFAULT 'groovy',
+      element_path TEXT,
+      attribute_name TEXT,
+      error_summary TEXT,
+      fix_summary TEXT,
+      manual_steps TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_generated_fixes_artifact_id ON generated_fixes(artifact_id);
+
+    CREATE TABLE IF NOT EXISTS healing_cycles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      completed_at DATETIME,
+      artifacts_scanned INTEGER DEFAULT 0,
+      failures_found INTEGER DEFAULT 0,
+      fixes_generated INTEGER DEFAULT 0,
+      structural_flags_raised INTEGER DEFAULT 0,
+      structural_flags_json TEXT,
+      duplicates_skipped INTEGER DEFAULT 0,
+      errors INTEGER DEFAULT 0,
+      capped_failures INTEGER DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS structural_flags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      artifact_id TEXT NOT NULL,
+      error_signature TEXT NOT NULL,
+      first_flagged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_flagged_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      recurrence_count INTEGER DEFAULT 1,
+      snoozed_until DATETIME,
+      acknowledged_at DATETIME,
+      resolved_at DATETIME,
+      UNIQUE(artifact_id, error_signature)
+    );
+    CREATE INDEX IF NOT EXISTS idx_structural_flags_artifact_id ON structural_flags(artifact_id);
+  `);
+
+  // Migrations: add columns to existing tables that predate this schema version.
+  // Using try/catch since ALTER TABLE fails silently if column already exists in some SQLite builds,
+  // but throws in others — safer than checking information_schema which SQLite doesn't have.
+  const migrations = [
+    `ALTER TABLE healing_cycles ADD COLUMN capped_failures INTEGER DEFAULT 0`,
+    `ALTER TABLE deployments ADD COLUMN triggered_via TEXT DEFAULT 'cli'`,
+    `ALTER TABLE generated_fixes ADD COLUMN triggered_via TEXT DEFAULT 'cli'`,
+    `ALTER TABLE structural_flags ADD COLUMN triggered_via TEXT DEFAULT 'cli'`,
+    `ALTER TABLE generated_fixes ADD COLUMN fix_type TEXT DEFAULT 'groovy'`,
+    `ALTER TABLE generated_fixes ADD COLUMN element_path TEXT`,
+    `ALTER TABLE generated_fixes ADD COLUMN attribute_name TEXT`,
+    `ALTER TABLE artifact_versions ADD COLUMN cpi_version TEXT`,
+    `ALTER TABLE generated_fixes ADD COLUMN error_summary TEXT`,
+    `ALTER TABLE generated_fixes ADD COLUMN fix_summary TEXT`,
+    `ALTER TABLE generated_fixes ADD COLUMN manual_steps TEXT`
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch (e) { /* column already exists — safe to ignore */ }
+  }
 };
 
 module.exports = initSchema;
