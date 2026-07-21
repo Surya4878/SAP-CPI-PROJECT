@@ -64,15 +64,18 @@ function renderArtifacts(artifacts, isSearch = false) {
           <span class="badge">${groups[pkg].length}</span>
         </div>
         <ul class="package-items">
-          ${groups[pkg].map(a => `
+          ${groups[pkg].map(a => {
+            const status = a.runtime_status || 'UNKNOWN';
+            const statusColor = status === 'STARTED' ? '#10b981' : status === 'FAILED' || status === 'ERROR' ? '#ef4444' : '#94a3b8';
+            return `
             <li class="artifact-item ${a.artifact_id === currentArtifactId ? 'active' : ''}" data-id="${a.artifact_id}" onclick="selectArtifact('${a.artifact_id}')">
-              <div class="artifact-name">${a.name}</div>
+              <div class="artifact-name">${a.artifact_id}</div>
               <div class="artifact-meta">
                 <span>Risk: ${a.composite_risk || 'N/A'}</span>
-                <span>${a.runtime_status || 'UNKNOWN'}</span>
+                <span style="color: ${statusColor}; font-weight: 600;">${status}</span>
               </div>
-            </li>
-          `).join('')}
+            </li>`;
+          }).join('')}
         </ul>
       </div>
     `;
@@ -92,11 +95,35 @@ async function selectArtifact(id) {
   try {
     const data = await fetchAPI(`/api/artifacts/${id}`);
     
-    document.getElementById('detail-title').textContent = data.artifact.name;
+    document.getElementById('detail-title').textContent = data.artifact.source_id;
+    const rStatus = data.artifact.runtime_status || 'UNKNOWN';
+    const statusColor = rStatus === 'STARTED' ? '#10b981' : rStatus === 'FAILED' || rStatus === 'ERROR' ? '#ef4444' : '#94a3b8';
     document.getElementById('detail-badges').innerHTML = `
       <span>Risk: ${data.risk ? data.risk.composite_risk : 'N/A'}</span>
-      <span>Status: ${data.artifact.runtime_status || 'UNKNOWN'}</span>
+      <span style="color:${statusColor}; font-weight:600;">Status: ${rStatus}</span>
+      <span id="live-saved-version" style="background-color: var(--primary); color: white;">Saved: Loading...</span>
+      <span id="live-deployed-version" style="background-color: var(--primary); color: white;">Deployed: Loading...</span>
     `;
+
+    // Fetch live versions asynchronously (non-blocking)
+    fetchAPI(`/api/artifacts/${id}/live-versions`).then(live => {
+      const savedEl = document.getElementById('live-saved-version');
+      const depEl = document.getElementById('live-deployed-version');
+      if (savedEl) savedEl.textContent = `Saved: ${live.savedVersion}`;
+      if (depEl) depEl.textContent = `Deployed: ${live.deployedVersion}`;
+    }).catch(() => {
+      const savedEl = document.getElementById('live-saved-version');
+      const depEl = document.getElementById('live-deployed-version');
+      if (savedEl) savedEl.textContent = `Saved: N/A`;
+      if (depEl) depEl.textContent = `Deployed: N/A`;
+    });
+
+    // === RESET ALL SECTIONS ON ARTIFACT SWITCH ===
+    // Clear the pending fix section immediately to avoid showing stale data from previous artifact
+    const pendingSection = document.getElementById('pending-fix-section');
+    const diffContainer = document.getElementById('diff-container');
+    pendingSection.style.display = 'none';
+    diffContainer.innerHTML = '';
 
     // Explain section reset
     const explainBtn = document.getElementById('explain-btn');
@@ -120,10 +147,8 @@ async function selectArtifact(id) {
     applyInput.value = '';
     applyBtn.disabled = true;
     applyBtn.textContent = 'Apply Fix';
-    applyInput.oninput = () => applyBtn.disabled = (applyInput.value !== data.artifact.name);
+    applyInput.oninput = () => applyBtn.disabled = (applyInput.value !== data.artifact.source_id);
     
-    const pendingSection = document.getElementById('pending-fix-section');
-    const diffContainer = document.getElementById('diff-container');
     if (data.fixes && data.fixes.length > 0) {
       pendingSection.style.display = 'block';
       const fix = data.fixes[0];
@@ -231,13 +256,23 @@ async function selectArtifact(id) {
       vInput.oninput = checkRollbackFields;
     }
 
+    // Deploy section
+    const deployInput = document.getElementById('deploy-confirm-input');
+    const deployBtn = document.getElementById('deploy-btn');
+    const deployStatus = document.getElementById('deploy-status');
+    deployInput.value = '';
+    deployBtn.disabled = true;
+    deployBtn.textContent = 'Deploy';
+    if (deployStatus) deployStatus.textContent = '';
+    deployInput.oninput = () => deployBtn.disabled = (deployInput.value !== data.artifact.source_id);
+
     // Undeploy section
     const undeployInput = document.getElementById('undeploy-confirm-input');
     const undeployBtn = document.getElementById('undeploy-btn');
     undeployInput.value = '';
     undeployBtn.disabled = true;
     undeployBtn.textContent = 'Undeploy';
-    undeployInput.oninput = () => undeployBtn.disabled = (undeployInput.value !== data.artifact.name);
+    undeployInput.oninput = () => undeployBtn.disabled = (undeployInput.value !== data.artifact.source_id);
 
     // Flags section
     const flagsContainer = document.getElementById('flags-container');
@@ -447,6 +482,29 @@ document.getElementById('undeploy-btn').onclick = async () => {
     alert(`Undeploy failed: ${err.message}`);
     btn.disabled = false;
     btn.textContent = 'Undeploy';
+  }
+};
+
+document.getElementById('deploy-btn').onclick = async () => {
+  if (!currentArtifactId) return;
+  const btn = document.getElementById('deploy-btn');
+  const input = document.getElementById('deploy-confirm-input');
+  const statusEl = document.getElementById('deploy-status');
+  btn.disabled = true;
+  btn.textContent = 'Deploying...';
+  if (statusEl) statusEl.textContent = '';
+  
+  try {
+    await fetchAPI(`/api/artifacts/${currentArtifactId}/deploy`, {
+      method: 'POST',
+      body: JSON.stringify({ confirmedArtifactName: input.value })
+    });
+    if (statusEl) { statusEl.textContent = '✓ Deploy triggered! Status may take a moment to update.'; statusEl.style.color = 'var(--success)'; }
+    setTimeout(() => selectArtifact(currentArtifactId), 3000);
+  } catch (err) {
+    alert(`Deploy failed: ${err.message}`);
+    btn.disabled = false;
+    btn.textContent = 'Deploy';
   }
 };
 

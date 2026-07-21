@@ -146,7 +146,8 @@ async function getFailureDetails(artifactId, options = {}) {
   }
   
   const filter = `IntegrationFlowName eq '${artifactId}' and Status eq 'FAILED' and LogStart ge datetime'${timestamp}'`;
-  const url = `/MessageProcessingLogs?$filter=${encodeURIComponent(filter)}&$top=${limit}&$select=MessageGuid,LogStart&$format=json`;
+  // $orderby=LogStart desc ensures we always get the LATEST failures first (SAP default is oldest-first)
+  const url = `/MessageProcessingLogs?$filter=${encodeURIComponent(filter)}&$orderby=LogStart%20desc&$top=${limit}&$select=MessageGuid,LogStart&$format=json`;
 
   let results = [];
   try {

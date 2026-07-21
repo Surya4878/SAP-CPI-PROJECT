@@ -83,6 +83,21 @@
             </div>
 
             <div class="section-card">
+              <h3>Deploy</h3>
+              <p>Deploys (or re-deploys) this artifact to the live runtime.</p>
+              
+              <div class="danger-zone">
+                <h4>Confirm Deploy</h4>
+                <p>Modifies the live tenant. Type the artifact name to confirm.</p>
+                <div class="input-group">
+                  <input type="text" id="deploy-confirm-input" placeholder="Type artifact name here">
+                  <button id="deploy-btn" class="btn primary" disabled>Deploy</button>
+                </div>
+                <div id="deploy-status" class="status-msg"></div>
+              </div>
+            </div>
+
+            <div class="section-card">
               <h3>Undeploy</h3>
               <p>Removes the artifact from the live runtime.</p>
               
@@ -105,6 +120,6 @@
       </section>
     </main>
   </div>
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

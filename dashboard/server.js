@@ -6,10 +6,12 @@ const { generateFixForArtifact } = require('../fixer/generate');
 const { applyFixForArtifact } = require('../fixer/apply');
 const { rollbackArtifact } = require('../deploy/rollback');
 const { undeployArtifactAction } = require('../deploy/undeploy');
+const { deployArtifact } = require('../deploy/index');
 const { generateExplanation, fetchFromLLMWithRetry } = require('../reviewer/llm');
 const { assembleContext } = require('../reviewer/context');
 const { NeedsStructuralReviewError, GenerationFailedError } = require('../orchestrator/errors');
 const { getFailureDetails } = require('../logs/index');
+const queue = require('../queue');
 
 const app = express();
 app.use(express.json());
@@ -126,6 +128,46 @@ app.get('/api/artifacts/:id/versions', (req, res) => {
     });
 
     res.json(displayVersions);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/artifacts/:id/live-versions', async (req, res) => {
+  const artifactId = req.params.id;
+  try {
+    const artifactRow = db.prepare('SELECT package_id FROM artifacts WHERE source_id = ?').get(artifactId);
+    let savedVersion = 'Unknown';
+    let deployedVersion = 'Not Deployed';
+
+    if (artifactRow && artifactRow.package_id) {
+      try {
+        const savedRes = await queue.get(`/IntegrationPackages('${artifactRow.package_id}')/IntegrationDesigntimeArtifacts(Id='${artifactId}',Version='active')`);
+        if (savedRes && savedRes.data && savedRes.data.d) {
+          savedVersion = savedRes.data.d.Version || 'Unknown';
+        }
+      } catch(e) {
+        console.warn(`[API] Failed to fetch saved version for ${artifactId}: ${e.message}`);
+      }
+    }
+
+    try {
+      const depRes = await queue.get(`/IntegrationRuntimeArtifacts('${artifactId}')`);
+      const d = depRes && depRes.data && depRes.data.d;
+      if (d) {
+        // Some tenants wrap in results[], others return directly
+        const entry = Array.isArray(d.results) ? d.results[0] : d;
+        if (entry && entry.Version) deployedVersion = entry.Version;
+      }
+    } catch(e) {
+      if (e.response && e.response.status === 404) {
+        deployedVersion = 'Not Deployed';
+      } else {
+        console.warn(`[API] Failed to fetch deployed version for ${artifactId}: ${e.message}`);
+      }
+    }
+
+    res.json({ savedVersion, deployedVersion });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -278,6 +320,22 @@ app.post('/api/artifacts/:id/undeploy', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.post('/api/artifacts/:id/deploy', async (req, res) => {
+  const artifactId = req.params.id;
+  const { confirmedArtifactName } = req.body;
+  if (!confirmedArtifactName || confirmedArtifactName !== artifactId) {
+    return res.status(400).json({ error: 'Confirmation artifact name did not match.' });
+  }
+
+  try {
+    const result = await deployArtifact(artifactId, 'dashboard');
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 app.post('/api/structural-flags/:id/acknowledge', (req, res) => {
   const flagId = req.params.id;

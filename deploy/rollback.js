@@ -9,20 +9,24 @@ const { verifyRuntimeState } = require('./verifyRuntime');
 const { execSync } = require('child_process');
 
 async function rollbackArtifact(artifactId, confirmedArtifactName, targetVersionId, triggeredVia = 'cli') {
-  if (!artifactId) throw new Error("Artifact ID is required.");
-  if (!targetVersionId) throw new Error("Target Version ID is required.");
+  if (!artifactId) throw new Error('Artifact ID is required.');
+  if (!targetVersionId) throw new Error('Target Version ID is required.');
   
   if (artifactId !== confirmedArtifactName) {
     throw new Error(`Confirmation mismatched. Expected '${artifactId}', got '${confirmedArtifactName}'. Aborting rollback.`);
   }
 
-  const currentArtifact = db.prepare('SELECT content_hash FROM artifacts WHERE source_id = ? AND deleted_at IS NULL').get(artifactId);
-  if (!currentArtifact) {
+  // Lookup package_id for package-scoped API (avoids locked-artifact 400 errors)
+  const artifactRow = db.prepare('SELECT name, package_id FROM artifacts WHERE source_id = ? AND deleted_at IS NULL').get(artifactId);
+  if (!artifactRow) {
     throw new Error(`Artifact '${artifactId}' not found in local artifacts database.`);
   }
+  const artifactName = artifactRow.name || artifactId;
+  const packageId = artifactRow.package_id;
+  if (!packageId) throw new Error(`Package ID not found for artifact ${artifactId}. Run a sync first.`);
 
-  const currentHash = currentArtifact.content_hash;
-  console.log(`Current DB content_hash: ${currentHash || 'UNKNOWN'}`);
+  const currentHash = artifactRow.content_hash || 'UNKNOWN';
+  console.log(`Current DB content_hash: ${currentHash}`);
 
   const priorVersion = db.prepare('SELECT id, content_hash, saved_at, zip_content FROM artifact_versions WHERE id = ? AND artifact_id = ?').get(targetVersionId, artifactId);
 
@@ -39,20 +43,22 @@ async function rollbackArtifact(artifactId, confirmedArtifactName, targetVersion
 
   console.log('\nInitiating Rollback...');
   console.log('\n1. Reverting Design-Time Content...');
+  const base64Zip = priorVersion.zip_content.toString('base64');
   let csrfToken, cookies;
   try {
-    const creds = await getCSRFCredentials();
+    // Always force-refresh CSRF before a write operation
+    const creds = await getCSRFCredentials(true);
     csrfToken = creds.csrfToken;
     cookies = creds.cookies;
   } catch (err) {
     throw new Error(`CSRF fetch failed: ${err.message}`);
   }
 
-  const base64Zip = priorVersion.zip_content.toString('base64');
   try {
+    // Use the standard endpoint for PUT
     await queue.put(`/IntegrationDesigntimeArtifacts(Id='${artifactId}',Version='active')`, {
       Id: artifactId,
-      Name: artifactId,
+      Name: artifactName,
       ArtifactContent: base64Zip
     }, {
       headers: {
@@ -62,9 +68,16 @@ async function rollbackArtifact(artifactId, confirmedArtifactName, targetVersion
         'Accept': 'application/json'
       }
     });
-    console.log(`Design-time artifact '${artifactId}' successfully reverted to ${priorVersion.content_hash}.`);
+    console.log(`Design-time artifact '${artifactId}' successfully reverted.`);
   } catch (err) {
-    throw new Error(`Failed to revert design-time artifact: ${err.message}`);
+    const responseBody = err.response ? JSON.stringify(err.response.data) : '';
+    const isLocked = responseBody.includes('locked');
+    if (isLocked) {
+      throw new Error(
+        `The artifact "${artifactId}" is locked. Close the artifact editor in the SAP Integration Suite browser tab, then retry.`
+      );
+    }
+    throw new Error(`Failed to revert design-time artifact: ${err.message} | Response: ${responseBody}`);
   }
 
   console.log('\n2. Deploying Restored Artifact...');
@@ -92,14 +105,6 @@ async function rollbackArtifact(artifactId, confirmedArtifactName, targetVersion
   console.log(`\nRollback Outcome:`);
   console.log(`Runtime State Before: ${beforeState}. After: ${afterState}`);
   console.log(`Content Hash Before: ${currentHash}. After: ${priorVersion.content_hash}`);
-
-  console.log('\nTriggering background DB sync...');
-  try {
-    execSync('node discovery/run.js', { stdio: 'inherit' });
-    console.log('✅ Rollback sequence completed and synced.');
-  } catch (err) {
-    console.error('Rollback completed but auto-sync failed. Please run `node discovery/run.js` manually.');
-  }
 
   return { success: true, artifactId, restoredHash: priorVersion.content_hash };
 }
