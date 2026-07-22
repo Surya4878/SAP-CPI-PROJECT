@@ -195,6 +195,7 @@ const initSchema = (db) => {
       content_hash TEXT NOT NULL,
       metadata_hash TEXT,
       inner_content_hash TEXT,
+      description TEXT,
       zip_content BLOB NOT NULL,
       saved_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
@@ -219,7 +220,8 @@ const initSchema = (db) => {
       attribute_name TEXT,
       error_summary TEXT,
       fix_summary TEXT,
-      manual_steps TEXT
+      manual_steps TEXT,
+      target_file_path TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_generated_fixes_artifact_id ON generated_fixes(artifact_id);
 
@@ -264,6 +266,7 @@ const initSchema = (db) => {
     `ALTER TABLE generated_fixes ADD COLUMN element_path TEXT`,
     `ALTER TABLE generated_fixes ADD COLUMN attribute_name TEXT`,
     `ALTER TABLE artifact_versions ADD COLUMN cpi_version TEXT`,
+    `ALTER TABLE artifact_versions ADD COLUMN description TEXT`,
     `ALTER TABLE generated_fixes ADD COLUMN error_summary TEXT`,
     `ALTER TABLE generated_fixes ADD COLUMN fix_summary TEXT`,
     `ALTER TABLE generated_fixes ADD COLUMN manual_steps TEXT`

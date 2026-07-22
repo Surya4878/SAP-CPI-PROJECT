@@ -12,6 +12,7 @@ const { assembleContext } = require('../reviewer/context');
 const { NeedsStructuralReviewError, GenerationFailedError } = require('../orchestrator/errors');
 const { getFailureDetails } = require('../logs/index');
 const queue = require('../queue');
+const AdmZip = require('adm-zip');
 
 const app = express();
 app.use(express.json());
@@ -84,7 +85,7 @@ app.get('/api/artifacts/:id/versions', (req, res) => {
   try {
     const artifactId = req.params.id;
     const allVersions = db.prepare(`
-      SELECT id, cpi_version, content_hash, metadata_hash, inner_content_hash, saved_at
+      SELECT id, cpi_version, content_hash, metadata_hash, inner_content_hash, saved_at, description
       FROM artifact_versions 
       WHERE artifact_id = ? 
       ORDER BY saved_at DESC LIMIT 50
@@ -104,6 +105,10 @@ app.get('/api/artifacts/:id/versions', (req, res) => {
       } else {
         if (v.inner_content_hash && v.inner_content_hash === currentGroup.inner_content_hash) {
           currentGroup.oldest_saved_at = v.saved_at; 
+          // Prefer non-null description if grouping
+          if (!currentGroup.description && v.description) {
+            currentGroup.description = v.description;
+          }
         } else {
           currentGroup = { ...v, oldest_saved_at: v.saved_at };
           distinctVersions.push(currentGroup);
@@ -113,9 +118,12 @@ app.get('/api/artifacts/:id/versions', (req, res) => {
 
     const displayVersions = distinctVersions.slice(0, 10).map(v => {
       let dateStr = v.saved_at;
-      if (v.oldest_saved_at !== v.saved_at) {
+      if (v.description) {
+        dateStr = `${v.saved_at} — ${v.description}`;
+      } else if (v.oldest_saved_at !== v.saved_at) {
         dateStr = `unchanged from ${v.oldest_saved_at} to ${v.saved_at}`;
       }
+      
       const isCurrent = v.inner_content_hash ? (v.inner_content_hash === allVersions[0].inner_content_hash) : (v.content_hash === allVersions[0].content_hash);
       return {
         id: v.id,
@@ -266,7 +274,35 @@ app.post('/api/artifacts/:id/explain', async (req, res) => {
     if (!contextResult) {
       return res.status(404).json({ error: 'Could not assemble context for artifact.' });
     }
-    const explanation = await generateExplanation(contextResult.contextBundleString, artifactId);
+
+    // Live ZIP Fetch for enriched context
+    let sourceFilesContext = "";
+    try {
+      const artifactMeta = db.prepare('SELECT type, version FROM artifacts WHERE source_id = ? AND deleted_at IS NULL').get(artifactId);
+      if (artifactMeta && artifactMeta.version && artifactMeta.type === 'IFlow') {
+        const url = `/IntegrationDesigntimeArtifacts(Id='${artifactId}',Version='${artifactMeta.version}')/$value`;
+        const response = await queue.get(url, { responseType: 'arraybuffer' });
+        const zip = new AdmZip(Buffer.from(response.data, 'binary'));
+        
+        const files = [];
+        for (const entry of zip.getEntries()) {
+          const name = entry.entryName;
+          if (name.endsWith('.iflw') || name.endsWith('.groovy') || name.endsWith('.js') || name.endsWith('.xslt') || name.endsWith('.xml')) {
+            files.push(`--- FILE: ${name} ---\n${zip.readAsText(entry)}`);
+          }
+        }
+        
+        if (files.length > 0) {
+          sourceFilesContext = `\n\n=== RAW SOURCE FILES (For Ground Truth) ===\n${files.join('\n\n')}`;
+        }
+      }
+    } catch (err) {
+      console.warn(`[WARN] Failed to fetch live ZIP for Explain context: ${err.message}`);
+    }
+
+    const enhancedContextString = contextResult.contextBundleString + sourceFilesContext;
+
+    const explanation = await generateExplanation(enhancedContextString, artifactId);
     res.json({ explanation });
   } catch (err) {
     res.status(500).json({ error: err.message });

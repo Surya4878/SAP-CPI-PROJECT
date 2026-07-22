@@ -1,7 +1,7 @@
 const { XMLParser } = require('fast-xml-parser');
 const { parseAdapter, propertiesToMap } = require('./adapters');
 
-const PARSER_VERSION = 3; // Bump version to catch JMS queues
+const PARSER_VERSION = 4; // Bump version to catch pallet properties
 
 function findParentsWithProperty(obj, propName, result = []) {
   if (obj === null || typeof obj !== 'object') return result;
@@ -20,6 +20,38 @@ function findParentsWithProperty(obj, propName, result = []) {
     }
   }
   return result;
+}
+
+function parseEscapedTable(escapedXml) {
+  if (!escapedXml) return null;
+  // Some values might just be plain strings, but if it starts with <row>, it's a table
+  if (typeof escapedXml === 'string' && escapedXml.includes('<row>')) {
+    try {
+      // Wrap it in a root tag so it's valid XML
+      const xmlStr = `<root>${escapedXml}</root>`;
+      const parser = new XMLParser({ ignoreAttributes: false, parseAttributeValue: true });
+      const parsed = parser.parse(xmlStr);
+      
+      let rows = parsed.root.row;
+      if (!Array.isArray(rows)) rows = [rows];
+      
+      return rows.map(r => {
+        const obj = {};
+        let cells = r.cell;
+        if (!Array.isArray(cells)) cells = [cells];
+        
+        for (const cell of cells) {
+          if (cell['@_id']) {
+            obj[cell['@_id']] = cell['#text'] !== undefined ? cell['#text'] : '';
+          }
+        }
+        return obj;
+      }).filter(o => Object.keys(o).length > 0);
+    } catch (err) {
+      return escapedXml; // If it fails to parse, return the string
+    }
+  }
+  return escapedXml;
 }
 
 function parseIFlow(xmlStr) {
@@ -62,10 +94,17 @@ function parseIFlow(xmlStr) {
     
     // Is it a process step?
     if (props.activityType) {
-      steps.push({
+      const step = {
         type: props.activityType,
         stepKey: element['@_name'] || props.stepKey || null
-      });
+      };
+
+      // Extract specific properties for the step
+      if (props.propertyTable) step.properties = parseEscapedTable(props.propertyTable);
+      if (props.headerTable) step.headers = parseEscapedTable(props.headerTable);
+      if (props.wrapContent) step.wrapContent = props.wrapContent;
+
+      steps.push(step);
 
       // Special handling for Exception Subprocess
       if (props.activityType === 'ErrorEventSubProcessTemplate') {

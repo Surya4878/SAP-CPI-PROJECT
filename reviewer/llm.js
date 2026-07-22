@@ -155,7 +155,30 @@ REVIEW CATEGORIES TO FOCUS ON:
   };
 }
 
+const crypto = require('crypto');
+
+// Ensure explanations table exists for caching
+db.exec(`
+  CREATE TABLE IF NOT EXISTS explanations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id TEXT NOT NULL,
+    context_hash TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(artifact_id, context_hash)
+  );
+`);
+
 async function generateExplanation(contextBundleString, artifactId) {
+  const contextHash = crypto.createHash('sha256').update(contextBundleString).digest('hex');
+
+  // 1. Check cache first
+  const cached = db.prepare('SELECT explanation FROM explanations WHERE artifact_id = ? AND context_hash = ?').get(artifactId, contextHash);
+  if (cached) {
+    console.log(`[Explain] Serving cached explanation for ${artifactId} (instantly)`);
+    return cached.explanation;
+  }
+
   const systemPrompt = `You are an expert SAP Cloud Integration (CPI) architect explaining an integration flow to a technical team lead. Write in clear, fluent natural language — avoid jargon dumps and bullet-only lists.
 
 STRUCTURE YOUR EXPLANATION LIKE THIS:
@@ -175,6 +198,9 @@ Highlight anything interesting or complex: Groovy scripts (describe what they do
 Based on the runtime logs and error info in the context, describe in plain English what is currently going wrong (if anything), or confirm the flow is healthy.
 
 CRITICAL RULES:
+- You have been provided BOTH a structured JSON metadata summary AND the raw source files (XML and Groovy scripts).
+- Use the structural metadata as a "table of contents", but cross-reference it with the raw source files to extract ground truth details (exact property values, adapter addresses, actual script logic, routing conditions).
+- Do not say "details are unknown" if the details exist in the raw source files.
 - Write in natural narrative sentences, not raw bullet dumps.
 - If runtime errors are present, translate the technical stack trace into a plain-English sentence that a non-developer could understand.
 - Keep total length under 500 words.
@@ -188,6 +214,9 @@ CRITICAL RULES:
   console.log(`[Explain] Requesting explanation for ${artifactId} from LLM...`);
   const explanation = await fetchFromLLMWithRetry(messages);
   console.log(`[Explain] Explanation generated successfully.`);
+  
+  // 2. Save to cache
+  db.prepare('INSERT OR IGNORE INTO explanations (artifact_id, context_hash, explanation) VALUES (?, ?, ?)').run(artifactId, contextHash, explanation);
   
   return explanation;
 }

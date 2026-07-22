@@ -145,6 +145,33 @@ async function getFailureDetails(artifactId, options = {}) {
     }
   }
   
+  const details = [];
+
+  // 1. Fetch deployment errors first (these trump runtime message processing errors)
+  try {
+    const deployRes = await queue.get(`/IntegrationRuntimeArtifacts('${artifactId}')`);
+    const d = deployRes.data && deployRes.data.d;
+    const entry = Array.isArray(d?.results) ? d.results[0] : d;
+    
+    if (entry && entry.Status === 'ERROR') {
+      try {
+        const errRes = await queue.get(`/IntegrationRuntimeArtifacts('${artifactId}')/ErrorInformation/$value`, { responseType: 'text' });
+        if (errRes.data) {
+          details.push({
+            guid: 'DEPLOYMENT_ERROR',
+            timestamp: new Date().toISOString(),
+            error: errRes.data
+          });
+        }
+      } catch (err) {
+        console.warn(`[WARN] Failed to fetch deployment error text for ${artifactId}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[WARN] Failed to check deployment status for ${artifactId}: ${err.message}`);
+  }
+
+  // 2. Fetch runtime message processing logs
   const filter = `IntegrationFlowName eq '${artifactId}' and Status eq 'FAILED' and LogStart ge datetime'${timestamp}'`;
   // $orderby=LogStart desc ensures we always get the LATEST failures first (SAP default is oldest-first)
   const url = `/MessageProcessingLogs?$filter=${encodeURIComponent(filter)}&$orderby=LogStart%20desc&$top=${limit}&$select=MessageGuid,LogStart&$format=json`;
@@ -157,11 +184,10 @@ async function getFailureDetails(artifactId, options = {}) {
     throw new Error(`Failed to fetch FAILED MessageProcessingLogs for ${artifactId}: ${err.message}`);
   }
 
-  if (results.length === 0) {
+  if (results.length === 0 && details.length === 0) {
     return [];
   }
 
-  const details = [];
 
   for (const res of results) {
     const guid = res.MessageGuid;

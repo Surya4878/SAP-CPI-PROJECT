@@ -4,6 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "fixer:start": "node fixer/index.js",
+    "cpi-mcp": "node cpi-mcp/server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "dashboard": "node dashboard/server.js"
   },

@@ -195,13 +195,15 @@ async function selectArtifact(id) {
           diffHtml += `</ol>`;
         }
         
+        if (fix.error_signature) {
+          diffHtml += `<strong>Raw Error:</strong><br/><pre style="background: var(--bg); color: var(--danger); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-top: 0.5rem; white-space: pre-wrap; word-wrap: break-word; border: 1px solid var(--danger);">${fix.error_signature.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+        }
+        
         // Show code diff or attribute path at the bottom
         if (fix.fix_type === 'xml_value') {
-          const safeContent = fix.proposed_content ? fix.proposed_content.substring(0, 300).replace(/</g, '&lt;').replace(/>/g, '&gt;') + '...' : 'No content diff available';
           diffHtml += `<div style="background: var(--bg); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-top: 1rem;">
                         <span style="color:var(--text-muted)">Element Path:</span> <code>${fix.element_path}</code><br/>
-                        <span style="color:var(--text-muted)">Attribute:</span> <code>${fix.attribute_name}</code><br/><br/>
-                        <span style="color:var(--text-muted)">Preview:</span><br/><pre style="white-space: pre-wrap; margin-top: 0.2rem;">${safeContent}</pre>
+                        <span style="color:var(--text-muted)">Attribute:</span> <code>${fix.attribute_name}</code><br/>
                       </div>`;
         } else {
           diffHtml += `<div style="background: var(--bg); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-top: 1rem;">
@@ -230,7 +232,7 @@ async function selectArtifact(id) {
         let optionsHtml = '';
         for (let i = 0; i < versions.length; i++) {
           const v = versions[i];
-          const displayVersion = v.cpi_version ? `v${v.cpi_version}` : `ID ${v.id}`;
+          const displayVersion = v.cpi_version ? v.cpi_version : `ID ${v.id}`;
           optionsHtml += `<option value="${v.id}" ${i === 0 ? 'selected' : ''}>${displayVersion} - ${v.date_str} ${v.is_current ? '(Current)' : ''}</option>`;
         }
         versionList.innerHTML = `<select id="rollback-version-input" style="padding:0.75rem; background:#1e293b; color:white; border:1px solid #3b82f6; border-radius:4px; width:100%; cursor:pointer; font-size:1rem; margin-bottom:1rem;">

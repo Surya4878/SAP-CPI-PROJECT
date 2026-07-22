@@ -40,27 +40,36 @@ async function applyFixForArtifact(artifactId, confirmedArtifactName, triggeredV
 
   // --- Step 2: Patch the ZIP with the proposed fix ---
   const zip = new AdmZip(rawZipBuffer);
-  let targetFilePath = null;
+  let targetFilePath = fixRow.target_file_path;
 
-  if (fixRow.fix_type === 'xml_value') {
-    for (const entry of zip.getEntries()) {
-      if (entry.entryName.endsWith('.iflw')) {
-        targetFilePath = entry.entryName;
-        break;
+  if (!targetFilePath) {
+    console.log(`[WARN] Legacy fix without target_file_path. Falling back to extension search.`);
+    if (fixRow.fix_type === 'xml_value') {
+      for (const entry of zip.getEntries()) {
+        if (entry.entryName.endsWith('.iflw')) {
+          targetFilePath = entry.entryName;
+          break;
+        }
       }
-    }
-    if (!targetFilePath) {
-      throw new Error('No .iflw XML file found in the fresh ZIP.');
+      if (!targetFilePath) {
+        throw new Error('No .iflw XML file found in the fresh ZIP.');
+      }
+    } else {
+      for (const entry of zip.getEntries()) {
+        if (entry.entryName.endsWith('.groovy')) {
+          targetFilePath = entry.entryName;
+          break;
+        }
+      }
+      if (!targetFilePath) {
+        throw new Error('No .groovy script found in the fresh ZIP.');
+      }
     }
   } else {
-    for (const entry of zip.getEntries()) {
-      if (entry.entryName.endsWith('.groovy')) {
-        targetFilePath = entry.entryName;
-        break;
-      }
-    }
-    if (!targetFilePath) {
-      throw new Error('No .groovy script found in the fresh ZIP.');
+    // Verify the explicit target file actually exists in the zip
+    const entry = zip.getEntry(targetFilePath);
+    if (!entry) {
+      throw new Error(`Target file ${targetFilePath} not found in the fresh ZIP.`);
     }
   }
 
@@ -119,6 +128,29 @@ async function applyFixForArtifact(artifactId, confirmedArtifactName, triggeredV
   // --- Step 5: Deploy ---
   console.log(`[INFO] Deploying fixed artifact ${artifactId}...`);
   await deployArtifact(artifactId, triggeredVia === 'dashboard' ? 'DASHBOARD_FIX' : 'CLI_FIX');
+
+  // --- Step 5.5: Save local version snapshot with description ---
+  const { createHash } = require('crypto');
+  const zipHash = createHash('sha256').update(newZipBuffer).digest('hex');
+  
+  // Calculate inner_content_hash to prevent duplicate issues later
+  const innerHashes = [];
+  for (const entry of zip.getEntries()) {
+    if (!entry.isDirectory && entry.entryName !== 'META-INF/MANIFEST.MF') {
+      const entryHash = createHash('sha256').update(entry.getData()).digest('hex');
+      innerHashes.push(`${entry.entryName}:${entryHash}`);
+    }
+  }
+  innerHashes.sort();
+  const innerContentHash = createHash('sha256').update(Buffer.from(innerHashes.join('\n'))).digest('hex');
+
+  const truncatedExplanation = fixRow.explanation ? fixRow.explanation.substring(0, 100) : 'No explanation provided';
+  const autoDescription = `Auto-fix: ${truncatedExplanation}..., applied ${new Date().toISOString()}, fix_type: ${fixRow.fix_type}`;
+
+  db.prepare(`
+    INSERT INTO artifact_versions (artifact_id, cpi_version, content_hash, metadata_hash, inner_content_hash, zip_content, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(artifactId, 'active', zipHash, 'autofix', innerContentHash, newZipBuffer, autoDescription);
 
   // --- Step 6: Mark fix as applied ---
   db.prepare('UPDATE generated_fixes SET applied = 1, applied_at = CURRENT_TIMESTAMP, triggered_via = ? WHERE id = ?')
