@@ -1,62 +1,19 @@
-const { getCSRFCredentials } = require('./auth/csrf');
-const queue = require('./queue/index');
-
-async function testDescriptionPut() {
-  const artifactId = 'Groovy_script_simple_logic'; // Safe test artifact
-
-  console.log('[Test] Fetching CSRF token...');
-  const { csrfToken, cookies } = await getCSRFCredentials();
-
-  console.log(`[Test] Fetching current ArtifactContent for ${artifactId}...`);
-  const getRes = await queue.get(`/IntegrationDesigntimeArtifacts(Id='${artifactId}',Version='active')/$value`, {
-    headers: { 'Cookie': cookies },
-    responseType: 'arraybuffer'
-  });
-  
-  const zipBase64 = Buffer.from(getRes.data).toString('base64');
-
-  console.log(`[Test] Attempting PUT with a Description field...`);
-  
-  const payload = {
-    Id: artifactId,
-    Name: artifactId, 
-    Description: 'Automated test description from Antigravity',
-    Comment: 'Automated test comment from Antigravity',
-    ArtifactContent: zipBase64
-  };
-
-  try {
-    const putRes = await queue.put(`/IntegrationDesigntimeArtifacts(Id='${artifactId}',Version='active')`, payload, {
-      headers: {
-        'x-csrf-token': csrfToken,
-        'Cookie': cookies,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      }
-    });
-    console.log(`[Test] PUT response status:`, putRes.status);
-    
-    console.log(`[Test] Re-fetching artifact metadata to check if Description stuck...`);
-    const checkRes = await queue.get(`/IntegrationDesigntimeArtifacts(Id='${artifactId}',Version='active')`, {
-      headers: { 'Cookie': cookies, 'Accept': 'application/json' }
-    });
-    
-    console.log(`[Test] Fetched Description:`, checkRes.data.d.Description);
-    console.log(`[Test] Fetched Comment:`, checkRes.data.d.Comment);
-    if (checkRes.data.d.Description === 'Automated test description from Antigravity' || checkRes.data.d.Comment === 'Automated test comment from Antigravity') {
-      console.log(`[SUCCESS] Description or Comment is writable!`);
-    } else {
-      console.log(`[FAILURE] Neither field stuck. Original data:`, checkRes.data.d);
-    }
-
-  } catch (err) {
-    console.error(`[Test] PUT request failed!`);
-    if (err.response) {
-      console.error(err.response.status, err.response.data);
-    } else {
-      console.error(err.message);
-    }
-  }
-}
-
-testDescriptionPut();
+const db = require('./database/index.js');
+const AdmZip = require('adm-zip');
+const row = db.prepare('SELECT zip_content FROM artifact_versions WHERE artifact_id = ? ORDER BY saved_at DESC LIMIT 1').get('dateanddatatypes');
+const zip = new AdmZip(row.zip_content);
+const iflw = zip.getEntries().find(e => e.entryName.endsWith('.iflw'));
+const content = zip.readAsText(iflw);
+const lines = content.split('\n');
+const line137 = lines[137];
+console.log('RAW line 137:', JSON.stringify(line137));
+const start = line137.indexOf('<value>') + 7;
+console.log('Substring:', JSON.stringify(line137.substring(start, start + 30)));
+const c1 = '>"Today\'s date is :- ${property.ate}"<';
+console.log('c1:', content.split(c1).length - 1);
+const c2 = '>"Today&apos;s date is :- ${property.ate}"<';
+console.log('c2:', content.split(c2).length - 1);
+const c3 = '>&quot;Today\'s date is :- ${property.ate}&quot;<';
+console.log('c3:', content.split(c3).length - 1);
+const c4 = '>&#34;Today\'s date is :- ${property.ate}&#34;<';
+console.log('c4:', content.split(c4).length - 1);

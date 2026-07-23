@@ -270,7 +270,9 @@ Respond with ONLY a JSON object in this exact schema, no markdown:
 app.post('/api/artifacts/:id/explain', async (req, res) => {
   const artifactId = req.params.id;
   try {
-    const contextResult = await assembleContext(artifactId, { requireStarted: false });
+    // Tell assembleContext that this call will include raw source files so
+    // the _context_included flag is set truthfully for the LLM.
+    const contextResult = await assembleContext(artifactId, { requireStarted: false, contextFlags: { rawSourceFiles: true } });
     if (!contextResult) {
       return res.status(404).json({ error: 'Could not assemble context for artifact.' });
     }

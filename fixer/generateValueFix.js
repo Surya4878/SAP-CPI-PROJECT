@@ -6,17 +6,21 @@ const { validateStructuralIntegrity } = require('./validateStructuralIntegrity')
  * Attempts to generate a targeted value-level fix for an .iflw XML file based on an error log.
  * @param {string} originalXml The raw XML of the .iflw file
  * @param {string} issueContext The error string to provide to the LLM
- * @returns {object} { proposedContent, explanation, confidenceLevel, elementPath, attributeName }
+ * @param {string} parsedMetaText Stringified parsed metadata JSON
+ * @param {string} reviewsText Prior review findings
+ * @param {string} adapterContextText Pre-formatted list of known adapter endpoints (optional)
+ * @returns {object} { proposedContent, currentValue, proposedValue, targetPattern, targetReplacement, explanation, confidenceLevel, elementPath, attributeName }
  * @throws {NeedsStructuralReviewError} if it cannot uniquely identify the value or if the LLM proposes a structural change
  * @throws {GenerationFailedError} if LLM generation fails entirely
  */
-async function generateValueFixForXml(originalXml, issueContext, parsedMetaText, reviewsText) {
+async function generateValueFixForXml(originalXml, issueContext, parsedMetaText, reviewsText, adapterContextText) {
   const prompt = `You are an expert SAP CPI XML configuration fixer.
 The following XML (either an .iflw integration flow or a value_mapping.xml) is failing in production.
 
 Error Log:
 ${issueContext}
 
+${adapterContextText ? `=== KNOWN ADAPTER ENDPOINTS (Cross-reference these against the error) ===\n${adapterContextText}\n` : ''}
 Surrounding Artifact Context (Parsed Metadata):
 ${parsedMetaText || 'Not available'}
 
@@ -29,10 +33,12 @@ ${originalXml}
 Instructions:
 1. Identify the SINGLE attribute value or text node in the XML that is likely incorrect based on the error.
 2. In an .iflw file, this might be an adapter address, a Content Modifier property, header, or exchange property. In a value_mapping.xml, it might be a mapping value or agency name.
-3. Provide a dot-separated elementPath corresponding to the parsed JSON structure for display purposes (e.g., bpmn2:definitions.bpmn2:process.bpmn2:sendTask.0).
-4. Provide the attributeName that needs changing (use "_text" if it's the inner text of an element like <value>).
-5. Provide the exact currentValue of that attribute as it appears in the XML.
-6. Provide the proposedValue to fix the error.
+3. IMPORTANT: If the error mentions a hostname or URL (like "api.coinbase.m"), look at the === KNOWN ADAPTER ENDPOINTS === section above — the wrong URL is likely listed there.
+4. IMPORTANT: If the error is a generic deployment error (like "CAMEL_CONTEXT_NOT_STARTED" or "InstanceError"), this usually means SAP CPI is hiding a syntax error. You MUST thoroughly scan the XML for obvious typos or malformed expressions (e.g., misspelled dynamic properties like \${dat:now} instead of \${date:now}, or \${property.ate} instead of \${property.date}, or unclosed brackets). The currentValue must be the exact text to replace.
+5. Provide a dot-separated elementPath corresponding to the parsed JSON structure for display purposes (e.g., bpmn2:definitions.bpmn2:process.bpmn2:sendTask.0).
+6. Provide the attributeName that needs changing (use "_text" if it's the inner text of an element like <value>).
+7. Provide the exact currentValue of that attribute as it appears in the XML.
+8. Provide the proposedValue to fix the error.
 
 You must respond with ONLY a valid JSON object matching this exact schema, with absolutely no markdown formatting or extra text:
 {
@@ -84,7 +90,6 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
 
   // Sometimes the LLM says attributeName="value" for <value>content</value>
   if (attributeName === '_text' || !attributeName || attributeName === 'value') {
-    // Check if it's text content inside <value> or just any text content
     const textPattern = `>${currentValue}<`;
     const textCount = originalXml.split(textPattern).length - 1;
     
@@ -96,7 +101,6 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
   }
   
   if (matchCount === 0 && attributeName && attributeName !== '_text' && attributeName !== 'value') {
-    // Check as attribute
     const searchPattern1 = `${attributeName}="${currentValue}"`;
     const searchPattern2 = `${attributeName}='${currentValue}'`;
     
@@ -118,12 +122,29 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
   // while the actual value is stored in a <value> tag. If we haven't found a match yet,
   // let's just see if >currentValue< is globally unique in the file.
   if (matchCount === 0) {
-    const textPattern = `>${currentValue}<`;
-    const textCount = originalXml.split(textPattern).length - 1;
-    if (textCount === 1) {
-      targetPattern = textPattern;
-      targetReplacement = `>${proposedValue}<`;
-      matchCount = textCount;
+    const fallbackPatterns = [
+      { p: `>${currentValue}<`, r: `>${proposedValue}<` },
+      { p: `>"${currentValue}"<`, r: `>"${proposedValue}"<` },
+      { p: `>'${currentValue}'<`, r: `>'${proposedValue}'<` }
+    ];
+    
+    for (const { p, r } of fallbackPatterns) {
+      const count = originalXml.split(p).length - 1;
+      if (count === 1) {
+        targetPattern = p;
+        targetReplacement = r;
+        matchCount = 1;
+        break;
+      }
+    }
+
+    if (matchCount === 0) {
+      const rawCount = originalXml.split(currentValue).length - 1;
+      if (rawCount === 1) {
+        targetPattern = currentValue;
+        targetReplacement = proposedValue;
+        matchCount = 1;
+      }
     }
   }
   
@@ -137,13 +158,18 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
   
   const proposedContent = originalXml.replace(targetPattern, targetReplacement);
   
-  // Verify structural integrity mechanically
+  // Verify structural integrity mechanically at generation time
   if (!validateStructuralIntegrity(originalXml, proposedContent)) {
     throw new NeedsStructuralReviewError(`The proposed XML value fix failed structural validation.`);
   }
 
   return {
     proposedContent,
+    // Return the precise patch pair so apply.js can safely re-derive against fresh content
+    currentValue,
+    proposedValue,
+    targetPattern,     // exact string that was replaced in the XML
+    targetReplacement, // exact string it was replaced with
     explanation,
     confidenceLevel,
     elementPath,

@@ -221,7 +221,9 @@ const initSchema = (db) => {
       error_summary TEXT,
       fix_summary TEXT,
       manual_steps TEXT,
-      target_file_path TEXT
+      target_file_path TEXT,
+      current_value TEXT,
+      proposed_value TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_generated_fixes_artifact_id ON generated_fixes(artifact_id);
 
@@ -269,7 +271,9 @@ const initSchema = (db) => {
     `ALTER TABLE artifact_versions ADD COLUMN description TEXT`,
     `ALTER TABLE generated_fixes ADD COLUMN error_summary TEXT`,
     `ALTER TABLE generated_fixes ADD COLUMN fix_summary TEXT`,
-    `ALTER TABLE generated_fixes ADD COLUMN manual_steps TEXT`
+    `ALTER TABLE generated_fixes ADD COLUMN manual_steps TEXT`,
+    `ALTER TABLE generated_fixes ADD COLUMN current_value TEXT`,
+    `ALTER TABLE generated_fixes ADD COLUMN proposed_value TEXT`
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column already exists — safe to ignore */ }

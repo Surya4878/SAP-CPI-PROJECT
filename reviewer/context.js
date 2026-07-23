@@ -5,6 +5,10 @@ const { getFailureDetails } = require('../logs/index');
 
 async function assembleContext(artifactId, options = {}) {
   const requireStarted = options.requireStarted !== undefined ? options.requireStarted : true;
+  // contextFlags: caller declares what additional context it will append AFTER this call.
+  // This is used to generate an honest _context_included block for the LLM.
+  // e.g. { rawSourceFiles: true } when the Explain endpoint appends the live ZIP
+  const contextFlags = options.contextFlags || {};
 
   // 1. Verify deployed status
   const statusRecord = db.prepare(`
@@ -46,9 +50,19 @@ async function assembleContext(artifactId, options = {}) {
     WHERE artifact_id = ?
   `).all(artifactId);
 
-  // Assemble the bundle
+  // Assemble the bundle — _context_included tells the LLM exactly what it has.
+  // This is generated dynamically per call so it's always truthful.
+  // Callers that append raw source files (like the Explain endpoint) pass contextFlags: { rawSourceFiles: true }.
   const contextBundle = {
-    _NOTICE: "You are reviewing structural metadata, dependencies, and recent logs. You DO NOT have the full source code (Groovy scripts, XSLT, etc.). Make recommendations based only on the structure, adapters, exception handling patterns, and runtime errors provided below.",
+    _context_included: {
+      structuredMetadata: true,          // always: parsed steps, adapters, references
+      parsedAdapterConfig: metadata.adapters && metadata.adapters.length > 0,
+      rawSourceFiles: !!contextFlags.rawSourceFiles,  // true only when caller appends live ZIP content
+      recentErrors: failureDetails.length > 0
+    },
+    _instructions: contextFlags.rawSourceFiles
+      ? "You have BOTH structured metadata AND raw source files (XML, Groovy, etc.) in this bundle. Use the structured metadata as a table of contents, but cross-reference with the raw source files for ground truth values (exact addresses, property values, script logic). Do not say 'details are unknown' if the details exist in the raw source files."
+      : "You have structural metadata and runtime logs. You do NOT have the raw source files (Groovy scripts, full XML). Make recommendations based only on the structure, adapters, exception handling patterns, and runtime errors provided.",
     artifactId,
     deploymentStatus: statusRecord,
     parsedMetadata: metadata,

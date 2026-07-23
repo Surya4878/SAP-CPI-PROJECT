@@ -24,9 +24,9 @@ async function generateFixForArtifact(artifactId, failureDetails = null) {
   console.log(`[INFO] Syncing latest active version of ${artifactId} from CPI before fixing...`);
   try {
     const artifactMeta = db.prepare('SELECT type, version FROM artifacts WHERE source_id = ? AND deleted_at IS NULL').get(artifactId);
-    if (artifactMeta && artifactMeta.version) {
-      console.log(`[INFO] Force downloading version ${artifactMeta.version} (type: ${artifactMeta.type}) to ensure fix applies to latest code...`);
-      await processArtifactDownload({ type: artifactMeta.type, source_id: artifactId, version: artifactMeta.version });
+    if (artifactMeta && artifactMeta.type) {
+      console.log(`[INFO] Force downloading version active (type: ${artifactMeta.type}) to ensure fix applies to latest code...`);
+      await processArtifactDownload({ type: artifactMeta.type, source_id: artifactId, version: 'active' });
     } else {
       console.warn(`[WARN] No version found in DB for ${artifactId}, skipping pre-download.`);
     }
@@ -50,21 +50,22 @@ async function generateFixForArtifact(artifactId, failureDetails = null) {
   const errorSignature = failureDetails[0].error.split('\n')[0].trim().substring(0, 255);
 
   // 1. Check cache for an existing unapplied fix for THIS exact error on THIS exact code
-  const cachedFix = db.prepare(`
-    SELECT * FROM generated_fixes 
-    WHERE artifact_id = ? AND error_signature = ? AND original_content_hash = ? AND applied = 0
-    ORDER BY generated_at DESC LIMIT 1
-  `).get(artifactId, errorSignature, row.inner_content_hash);
+  // CACHE DISABLED: Users need to be able to regenerate if the LLM guesses wrong.
+  // const cachedFix = db.prepare(`
+  //   SELECT * FROM generated_fixes 
+  //   WHERE artifact_id = ? AND error_signature = ? AND original_content_hash = ? AND applied = 0
+  //   ORDER BY generated_at DESC LIMIT 1
+  // `).get(artifactId, errorSignature, row.inner_content_hash);
 
-  if (cachedFix) {
-    console.log(`[INFO] Serving cached generated fix for ${artifactId} (instantly)`);
-    return {
-      fixId: cachedFix.id,
-      artifactId,
-      fixType: cachedFix.fix_type,
-      explanation: cachedFix.explanation
-    };
-  }
+  // if (cachedFix) {
+  //   console.log(`[INFO] Serving cached generated fix for ${artifactId} (instantly)`);
+  //   return {
+  //     fixId: cachedFix.id,
+  //     artifactId,
+  //     fixType: cachedFix.fix_type,
+  //     explanation: cachedFix.explanation
+  //   };
+  // }
 
   const zip = new AdmZip(row.zip_content);
   let targetScriptPath = null;
@@ -120,6 +121,33 @@ async function generateFixForArtifact(artifactId, failureDetails = null) {
   
   const reviewsRow = db.prepare(`SELECT summary, issues_json FROM reviews WHERE artifact_id = ? ORDER BY reviewed_at DESC LIMIT 1`).get(artifactId);
   const reviewsText = reviewsRow ? `Summary: ${reviewsRow.summary}\nIssues: ${reviewsRow.issues_json}` : "No prior review findings available.";
+
+  // Build a plaintext summary of all known adapter addresses from parsed metadata.
+  // This is highlighted at the top of the LLM prompt so the model can cross-reference the error hostname
+  // against the exact value in the XML without digging through 26k characters.
+  let adapterContextText = '';
+  try {
+    if (parsedMetaRow && parsedMetaRow.parsed_json) {
+      const meta = JSON.parse(parsedMetaRow.parsed_json);
+      if (meta.adapters && meta.adapters.length > 0) {
+        const lines = meta.adapters
+          .filter(a => a.type || a.address)
+          .map(a => {
+            let line = `- ${a.type || 'Unknown'} (${a.direction || 'Unknown'})`;
+            if (a.address) line += `: ${a.address}`;
+            if (a.config && a.config.method) line += ` [${a.config.method}]`;
+            if (a.config && a.config.auth) line += ` auth: ${a.config.auth}`;
+            return line;
+          });
+        adapterContextText = lines.join('\n');
+      }
+    }
+  } catch (e) {
+    console.warn('[WARN] Failed to build adapter context text:', e.message);
+  }
+
+  let finalCurrentValue = null;
+  let finalProposedValue = null;
 
   if (isGroovyError) {
     console.log(`[INFO] Error appears to be in Groovy script: ${targetScriptPath}. Requesting Groovy fix from LLM...`);
@@ -182,10 +210,11 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
     finalFixSummary = jsonResult.fixSummary || finalExplanation;
     finalManualSteps = jsonResult.manualSteps || [];
     fixType = 'groovy';
+    // Groovy: no currentValue/proposedValue (full-file replace, not value substitution)
 
   } else if (isValueMappingError) {
     console.log(`[INFO] Error appears to be related to Value Mapping. Target: ${valueMappingPath}. Requesting XML value fix from LLM...`);
-    const xmlFixResult = await generateValueFixForXml(originalValueMapping, issueContext, parsedMetaText, reviewsText);
+    const xmlFixResult = await generateValueFixForXml(originalValueMapping, issueContext, parsedMetaText, reviewsText, adapterContextText);
     
     finalOriginalContent = originalValueMapping;
     finalProposedContent = xmlFixResult.proposedContent;
@@ -197,11 +226,13 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
     fixType = 'xml_value';
     elementPath = xmlFixResult.elementPath;
     attributeName = xmlFixResult.attributeName;
-    targetScriptPath = valueMappingPath; // to save the right path if needed
+    targetScriptPath = valueMappingPath;
+    finalCurrentValue = xmlFixResult.currentValue;
+    finalProposedValue = xmlFixResult.proposedValue;
 
   } else if (iflwPath) {
     console.log(`[INFO] Error appears to be XML-related. Target: ${iflwPath}. Requesting XML value fix from LLM...`);
-    const xmlFixResult = await generateValueFixForXml(originalIflw, issueContext, parsedMetaText, reviewsText);
+    const xmlFixResult = await generateValueFixForXml(originalIflw, issueContext, parsedMetaText, reviewsText, adapterContextText);
     
     finalOriginalContent = originalIflw;
     finalProposedContent = xmlFixResult.proposedContent;
@@ -214,6 +245,9 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
     elementPath = xmlFixResult.elementPath;
     attributeName = xmlFixResult.attributeName;
     targetScriptPath = iflwPath;
+    finalCurrentValue = xmlFixResult.currentValue;
+    finalProposedValue = xmlFixResult.proposedValue;
+
   } else {
     throw new NeedsStructuralReviewError(`Cannot determine a valid file to fix (.groovy or .iflw missing).`);
   }
@@ -223,8 +257,8 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
   // Save to database
   const insertStmt = db.prepare(`
     INSERT INTO generated_fixes (
-      artifact_id, issue_context, error_signature, original_content_hash, original_content, proposed_content, explanation, confidence_level, fix_type, element_path, attribute_name, error_summary, fix_summary, manual_steps, target_file_path
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      artifact_id, issue_context, error_signature, original_content_hash, original_content, proposed_content, explanation, confidence_level, fix_type, element_path, attribute_name, error_summary, fix_summary, manual_steps, target_file_path, current_value, proposed_value
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   
   insertStmt.run(
@@ -242,7 +276,9 @@ You must respond with ONLY a valid JSON object matching this exact schema, with 
     finalErrorSummary,
     finalFixSummary,
     JSON.stringify(finalManualSteps || []),
-    targetScriptPath
+    targetScriptPath,
+    finalCurrentValue,
+    finalProposedValue
   );
 
   console.log(`[INFO] Fix saved to database.`);

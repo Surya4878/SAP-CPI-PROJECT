@@ -73,7 +73,16 @@ async function processArtifactDownload(artifact) {
 
     const name = entry.name;
     const extType = getResourceType(path);
-    const contentBuffer = entry.getData();
+    let contentBuffer = entry.getData();
+    
+    // SAP CPI injects a timestamp comment (e.g., #Thu Jul 23 09:48:47 UTC 2026) into .prop files 
+    // when exporting. We must strip these before hashing so innerContentHash remains stable.
+    if (path.endsWith('.prop')) {
+      const text = contentBuffer.toString('utf8');
+      const cleanText = text.split(/[\r\n]+/).filter(l => !l.trim().startsWith('#')).join('\n');
+      contentBuffer = Buffer.from(cleanText, 'utf8');
+    }
+
     const contentHash = hashBuffer(contentBuffer);
     const size = entry.header.size;
     

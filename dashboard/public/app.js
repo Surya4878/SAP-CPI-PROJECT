@@ -109,8 +109,8 @@ async function selectArtifact(id) {
     fetchAPI(`/api/artifacts/${id}/live-versions`).then(live => {
       const savedEl = document.getElementById('live-saved-version');
       const depEl = document.getElementById('live-deployed-version');
-      if (savedEl) savedEl.textContent = `Saved: ${live.savedVersion}`;
-      if (depEl) depEl.textContent = `Deployed: ${live.deployedVersion}`;
+      if (savedEl) savedEl.textContent = `Saved: ${live.savedVersion !== 'Unknown' ? 'v' + live.savedVersion : live.savedVersion}`;
+      if (depEl) depEl.textContent = `Deployed: ${live.deployedVersion !== 'Not Deployed' ? 'v' + live.deployedVersion : live.deployedVersion}`;
     }).catch(() => {
       const savedEl = document.getElementById('live-saved-version');
       const depEl = document.getElementById('live-deployed-version');
@@ -232,7 +232,7 @@ async function selectArtifact(id) {
         let optionsHtml = '';
         for (let i = 0; i < versions.length; i++) {
           const v = versions[i];
-          const displayVersion = v.cpi_version ? v.cpi_version : `ID ${v.id}`;
+          const displayVersion = v.cpi_version ? `v${v.cpi_version}` : `ID ${v.id}`;
           optionsHtml += `<option value="${v.id}" ${i === 0 ? 'selected' : ''}>${displayVersion} - ${v.date_str} ${v.is_current ? '(Current)' : ''}</option>`;
         }
         versionList.innerHTML = `<select id="rollback-version-input" style="padding:0.75rem; background:#1e293b; color:white; border:1px solid #3b82f6; border-radius:4px; width:100%; cursor:pointer; font-size:1rem; margin-bottom:1rem;">
@@ -416,10 +416,11 @@ document.getElementById('generate-fix-btn').onclick = async () => {
       setTimeout(() => selectArtifact(currentArtifactId), 2000);
     }
   } catch (err) {
-    btn.disabled = false;
-    btn.textContent = 'Generate Fix';
     status.textContent = err.message;
     status.style.color = 'var(--danger)';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generate Fix';
   }
 };
 
